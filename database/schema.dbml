@@ -1,0 +1,158 @@
+// == SKEMA DATABASE GUDANG (WAREHOUSE) ==
+
+// --- Tipe Data Kustom (ENUMs) ---
+Enum movement_type_enum {
+  IN [note: 'Barang masuk dari PO atau Return']
+  OUT [note: 'Barang keluar dari SO']
+  TRANSFER [note: 'Pindah antar gudang']
+  ADJUSTMENT [note: 'Penyesuaian stok (rusak, hilang)']
+  RETURN [note: 'Barang kembali dari customer']
+}
+
+Enum reference_type_enum {
+  PO [note: 'Purchase Order']
+  SO [note: 'Sales Order']
+  TRANSFER [note: 'Stock Transfer']
+  MANUAL [note: 'Manual Adjustment']
+}
+
+Enum order_status_enum {
+  PENDING
+  PROCESSING
+  SHIPPED
+  COMPLETED
+  CANCELLED
+}
+
+
+// --- 1. Tabel Master Data (Dimensi) ---
+
+Table warehouses {
+  warehouse_id SERIAL [pk, increment]
+  name VARCHAR(100) [not null, unique]
+  location TEXT
+  created_at TIMESTAMP [default: `NOW()`]
+  
+  Note: 'Menyimpan daftar semua lokasi gudang'
+}
+
+Table categories {
+  category_id SERIAL [pk, increment]
+  name VARCHAR(100) [not null, unique]
+  parent_category_id INT [ref: > categories.category_id, note: 'Untuk sub-kategori']
+  created_at TIMESTAMP [default: `NOW()`]
+  
+  Note: 'Kategori produk (misal: Elektronik, Pakaian)'
+}
+
+Table suppliers {
+  supplier_id SERIAL [pk, increment]
+  name VARCHAR(150) [not null]
+  contact_info TEXT
+  created_at TIMESTAMP [default: `NOW()`]
+  
+  Note: 'Data pemasok barang'
+}
+
+Table products {
+  product_id SERIAL [pk, increment]
+  sku VARCHAR(50) [not null, unique, note: 'Stock Keeping Unit']
+  name VARCHAR(200) [not null]
+  description TEXT
+  category_id INT [ref: > categories.category_id]
+  cost_price DECIMAL(10, 2) [not null, note: 'Harga beli dari supplier']
+  sale_price DECIMAL(10, 2) [not null, note: 'Harga jual ke customer']
+  created_at TIMESTAMP [default: `NOW()`]
+  
+  Indexes {
+    (sku)
+    (category_id)
+  }
+  
+  Note: 'Master data semua produk yang dijual'
+}
+
+
+// --- 2. Tabel Inti Stok (Fakta) ---
+
+Table stock {
+  stock_id SERIAL [pk, increment]
+  product_id INT [not null, ref: > products.product_id]
+  warehouse_id INT [not null, ref: > warehouses.warehouse_id]
+  quantity_on_hand INT [not null, default: 0, note: 'Stok fisik saat ini']
+  reorder_point INT [default: 10, note: 'Batas untuk order ulang']
+  safety_stock INT [default: 5, note: 'Stok pengaman']
+  last_updated_at TIMESTAMP [default: `NOW()`]
+  
+  Indexes {
+    (product_id, warehouse_id) [unique, note: '1 produk hanya 1 baris per gudang']
+  }
+  
+  Note: 'Snapshot stok saat ini per produk per gudang'
+}
+
+Table stock_movements {
+  movement_id BIGSERIAL [pk, increment]
+  product_id INT [not null, ref: > products.product_id]
+  warehouse_id INT [not null, ref: > warehouses.warehouse_id]
+  movement_type movement_type_enum [not null]
+  quantity INT [not null, note: 'Jumlah absolut (positif)']
+  movement_date TIMESTAMP [default: `NOW()`]
+  reference_type reference_type_enum [note: 'Asal pergerakan (PO/SO)']
+  reference_id INT [note: 'ID dari PO/SO']
+  notes TEXT
+  
+  Indexes {
+    (product_id)
+    (warehouse_id)
+    (movement_date)
+    (reference_type, reference_id)
+  }
+  
+  Note: 'Log audit semua pergerakan. Source of Truth.'
+}
+
+
+// --- 3. Tabel Transaksi (Order) ---
+
+Table purchase_orders {
+  po_id SERIAL [pk, increment]
+  supplier_id INT [not null, ref: > suppliers.supplier_id]
+  order_date DATE [not null, default: `CURRENT_DATE`]
+  expected_delivery_date DATE
+  status order_status_enum [not null, default: 'PENDING']
+  created_at TIMESTAMP [default: `NOW()`]
+  
+  Note: 'Order pembelian ke supplier'
+}
+
+Table purchase_order_details {
+  po_detail_id SERIAL [pk, increment]
+  po_id INT [not null, ref: > purchase_orders.po_id]
+  product_id INT [not null, ref: > products.product_id]
+  quantity_ordered INT [not null]
+  unit_cost DECIMAL(10, 2) [not null]
+  
+  Note: 'Detail barang per PO'
+}
+
+Table sales_orders {
+  so_id SERIAL [pk, increment]
+  customer_name VARCHAR(150) [note: 'Disederhanakan']
+  order_date DATE [not null, default: `CURRENT_DATE`]
+  status order_status_enum [not null, default: 'PENDING']
+  shipping_address TEXT
+  created_at TIMESTAMP [default: `NOW()`]
+  
+  Note: 'Order penjualan dari customer'
+}
+
+Table sales_order_details {
+  so_detail_id SERIAL [pk, increment]
+  so_id INT [not null, ref: > sales_orders.so_id]
+  product_id INT [not null, ref: > products.product_id]
+  quantity_ordered INT [not null]
+  unit_price DECIMAL(10, 2) [not null]
+  
+  Note: 'Detail barang per SO'
+}
